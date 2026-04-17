@@ -8,6 +8,7 @@ library(ctmm)
 library(purrr)
 library(shinyWidgets)
 library(shinyjs)
+library(shinycssloaders)
 
 # set some default styling for ggirafe
 css_default_hover <- girafe_css_bicolor(primary = "#8f7d75", secondary = "#fadccf")
@@ -30,11 +31,9 @@ shinyModuleUserInterface <- function(id, label) {
   tagList(
     useShinyjs(),
     titlePanel("Outlier detection"),
-    plotOutput(ns("outl_plot")),
-    p("On the x-axis distances from the median longitude and latitude are ploted and on the y-axis the minimum speed required to explain the location estimate's displacement as straight-line motion."), 
-    hr(),
+    p("On the x-axis distances from the median longitude and latitude are ploted and on the y-axis the minimum speed required to explain the location estimate's displacement as straight-line motion."),
     fluidRow(
-      column(6, 
+      column(6,
              selectInput(
                ns("select_var"),
                label = "Select Variable",
@@ -42,37 +41,25 @@ shinyModuleUserInterface <- function(id, label) {
                  c("Speed (m/s)" = "speed",
                    "Distance (m)" = "distance")
              )
-             
+
       ),
-      column(6, 
+      column(6,
              uiOutput(ns("recursiveUI"))
-      )), 
+      )),
     uiOutput(ns("moreControls")),
     uiOutput(ns("moreControls2")),
-    girafeOutput(ns("plot"))
+    hr(),
+    fluidRow(
+      column(6, withSpinner(plotOutput(ns("outl_plot"), height = "400px"))),
+      column(6, withSpinner(girafeOutput(ns("plot"), height = "400px")))
+    )
   )
 }
 
 shinyModule <- function(input, output, session, data){ ## The parameter "data" is reserved for the data object passed on from the previous app
   ns <- session$ns ## all IDs of UI functions need to be wrapped in ns()
-  
+
   outl <- reactive({
-  
-#  req(input$filtertest)
-#    lapply(data, \(x) {
-#      xx <- outlie(x, plot = FALSE)
-#      xx})
-    #lapply(data, \(x) {
-    #  xx <- outlie(x, plot = FALSE)
-    #  if (input$recursive) {
-    #    while(max(xx[[input$select_var]]) > input$filtertest[2]) {
-    #      srk_tl <- srk_tl[!xx[[input$select_var]] < input$filtertest[2], ]
-    #      xx <- outlie(srk_tl, plot = FALSE)
-    #    }
-    #  }
-    #  xx
-    #})
-    
     lapply(data, \(x) {
       xx <- outlie(x, plot = FALSE)
       if(!is.null(input$recursive) & !is.null(input$filtertest)) {
@@ -86,11 +73,11 @@ shinyModule <- function(input, output, session, data){ ## The parameter "data" i
       xx
     })
   })
-  
+
   output$recursiveUI <- renderUI({
       checkboxInput(ns("recursive"), "Recursive", value = FALSE)
   })
-  
+
   observeEvent(input$select_var, {
     if (input$select_var == "speed") {
       shinyjs::show("recursive")
@@ -98,41 +85,60 @@ shinyModule <- function(input, output, session, data){ ## The parameter "data" i
       shinyjs::hide("recursive")
     }
   })
-  
-  output$outl_plot <- renderPlot({
-    plot(outl())
+
+  filtered_outl <- reactive({
+    if (is.null(input$slider_filtertest)) return(outl())
+    var <- input$select_var
+    lo <- input$slider_filtertest[1]
+    hi <- input$slider_filtertest[2]
+    lapply(outl(), \(x) {
+      keep <- x[[var]] >= lo & x[[var]] <= hi
+      if (!any(keep)) return(x)
+      out <- x[keep, , drop = FALSE]
+      # `outlie` is an S4 object; data.frame subsetting drops that bit and breaks plot dispatch.
+      class(out) <- class(x)
+      asS4(out)
+    })
   })
-  
+
+  output$outl_plot <- renderPlot({
+    plot(filtered_outl())
+  })
+
   reactive_data <- reactive({
-    outl_tibbl <- unlist(sapply(outl(), \(x) x[, input$select_var])) 
-    outl_tibbl <- outl_tibbl|> 
-      as_tibble() |> 
+    req(input$select_var)
+
+    outl_tibbl <- unlist(sapply(outl(), \(x) x[, input$select_var]))
+    req(length(outl_tibbl) > 0)
+
+    tbl <- as_tibble(outl_tibbl)
+    req(ncol(tbl) > 0)
+
+    tbl |>
       pivot_longer(everything(), names_to = "Individium", values_to = "speed")
   })
-  
+
   observeEvent(reactive_data(), {
-    
+
     req(reactive_data())
-    
-    quantiles = quantile(reactive_data()$speed, probs = seq(0, 1, by = 0.05))
+
+    quantiles = quantile(reactive_data()$speed, probs = seq(0, 1, by = 0.01))
     quantiles = quantiles[!duplicated(quantiles)]
-    
-    # if(input$select_var == "speed") browser()
-    
+
     output$moreControls <- renderUI({
-      
+
       tagList(
-        sliderTextInput(ns("slider_filtertest"), 
-                        label = "Range:", 
-                        choices = round(as.numeric(quantiles), 6), 
+        sliderTextInput(ns("slider_filtertest"),
+                        label = "Range:",
+                        choices = round(as.numeric(quantiles), 6),
                         selected = round(c(unique(as.numeric(quantiles))[1], as.numeric(quantiles)[length(as.numeric(quantiles))]), 6)
         )
       )
     })
-    
+
     output$moreControls2 <- renderUI({
       tagList(
-        sliderTextInput(ns("slider_filterperc"), 
+        sliderTextInput(ns("slider_filterperc"),
                         label = "Percentile:",
                         choices = names(quantiles),
                         selected = c(names(quantiles)[1],
@@ -143,45 +149,50 @@ shinyModule <- function(input, output, session, data){ ## The parameter "data" i
 
   observeEvent(input$slider_filtertest,  {
     req(input$slider_filterperc)
-    quantiles = quantile(reactive_data()$speed, probs = seq(0, 1, by = 0.05))
+    quantiles = quantile(reactive_data()$speed, probs = seq(0, 1, by = 0.01))
     quantiles = quantiles[!duplicated(quantiles)]
     ind <- which(round(as.numeric(quantiles), 6) %in% round(as.numeric(input$slider_filtertest), 6))
-    updateSliderTextInput(session = session, inputId = "slider_filterperc", selected = names(quantiles)[ind])
+    new_perc <- names(quantiles)[ind]
+    if (!identical(new_perc, input$slider_filterperc)) {
+      updateSliderTextInput(session = session, inputId = "slider_filterperc", selected = new_perc)
+    }
   }, ignoreInit = TRUE)
 
   observeEvent(input$slider_filterperc,  {
     req(input$slider_filtertest)
 
-    quantiles = quantile(reactive_data()$speed, probs = seq(0, 1, by = 0.05))
+    quantiles = quantile(reactive_data()$speed, probs = seq(0, 1, by = 0.01))
     quantiles = quantiles[!duplicated(quantiles)]
     ind <- which(names(quantiles) %in% input$slider_filterperc)
-#    print(paste0("Percentile: ", as.numeric(quantiles)[ind]))
-    updateSliderTextInput(session = session, inputId = "slider_filtertest", selected = round(as.numeric(quantiles)[ind], 6))
+    new_vals <- round(as.numeric(quantiles)[ind], 6)
+    if (!isTRUE(all.equal(new_vals, as.numeric(input$slider_filtertest)))) {
+      updateSliderTextInput(session = session, inputId = "slider_filtertest", selected = new_vals)
+    }
     }, ignoreInit = TRUE)
-  
+
   output$plot <- renderGirafe({
-    
+
     req(input$slider_filtertest)
-    
-    plot_data <- reactive_data() |> 
+
+    plot_data <- reactive_data() |>
       filter(speed >= input$slider_filtertest[1] & speed <= input$slider_filtertest[2])
-    
-    gg <- ggplot(plot_data, aes(x=speed)) + 
+
+    gg <- ggplot(plot_data, aes(x=speed)) +
       geom_histogram_interactive(hover_nearest = TRUE) +
       labs(x = if (input$select_var == "speed") "Speed (m/s)" else "Distance (m)") +
       theme_ipsum_rc()
     girafe(ggobj = gg)
 
   })
-  
-  dat.f <- reactive({ 
-    
+
+  dat.f <- reactive({
+
     req(input$slider_filtertest)
     req(input$select_var)
-    
+
     xx <- if(input$select_var == "speed") {
       map2(data, outl(), function(a, b) {
-        ind <- which(b$speed >= input$slider_filtertest[1] & 
+        ind <- which(b$speed >= input$slider_filtertest[1] &
                        b$speed <= input$slider_filtertest[2])
         if (length(ind) > 0) {
           a[ind, ]
@@ -191,7 +202,7 @@ shinyModule <- function(input, output, session, data){ ## The parameter "data" i
       })
     } else if(input$select_var == "distance") {
       map2(data, outl(), function(a, b) {
-        ind <- which(b$speed >= input$slider_filtertest[1] & 
+        ind <- which(b$speed >= input$slider_filtertest[1] &
                        b$speed <= input$slider_filtertest[2])
         if (length(ind) > 0) {
           a[ind, ]
@@ -202,7 +213,7 @@ shinyModule <- function(input, output, session, data){ ## The parameter "data" i
     }
     xx
   })
-  
+
   #return(reactive(filtered_data())) ## if data are not modified, the unmodified input data must be returned
   return(
     reactive({
@@ -210,8 +221,3 @@ shinyModule <- function(input, output, session, data){ ## The parameter "data" i
     })
   )
 }
-
-
-
-
-
