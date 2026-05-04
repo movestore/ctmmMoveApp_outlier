@@ -62,12 +62,17 @@ shinyModule <- function(input, output, session, data){ ## The parameter "data" i
   outl <- reactive({
     lapply(data, \(x) {
       xx <- outlie(x, plot = FALSE)
-      if(!is.null(input$recursive) & !is.null(input$filtertest)) {
-        if (input$select_var == "speed" & input$recursive) {
-          while(max(xx[["speed"]]) > input$filtertest[2]) {
-            srk_tl <- srk_tl[!xx[["speed"]] < input$filtertest[2], ]
-            xx <- outlie(srk_tl, plot = FALSE)
-          }
+      if (input$select_var == "speed" &&
+          isTRUE(input$recursive) &&
+          !is.null(input$slider_filtertest)) {
+        threshold <- input$slider_filtertest[2]
+
+        while (nrow(x) > 0 && max(xx[["speed"]]) > threshold) {
+          keep <- xx[["speed"]] < threshold
+          if (!any(keep)) return(x)
+          
+          x <- x[keep, ]
+          xx <- outlie(x, plot = FALSE)
         }
       }
       xx
@@ -80,9 +85,9 @@ shinyModule <- function(input, output, session, data){ ## The parameter "data" i
 
   observeEvent(input$select_var, {
     if (input$select_var == "speed") {
-      shinyjs::show("recursive")
+      shinyjs::show(ns("recursive"))
     } else {
-      shinyjs::hide("recursive")
+      shinyjs::hide(ns("recursive"))
     }
   })
 
