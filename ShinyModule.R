@@ -50,8 +50,8 @@ shinyModuleUserInterface <- function(id, label) {
     uiOutput(ns("moreControls2")),
     hr(),
     fluidRow(
-      column(6, withSpinner(plotOutput(ns("outl_plot"), height = "400px"))),
-      column(6, withSpinner(girafeOutput(ns("plot"), height = "400px")))
+      column(6, withSpinner(plotOutput(ns("outl_plot"), height = "400px"), hide.ui = FALSE)),
+      column(6, withSpinner(girafeOutput(ns("plot"), height = "400px"), hide.ui = FALSE))
     )
   )
 }
