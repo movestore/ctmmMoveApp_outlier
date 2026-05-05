@@ -59,24 +59,38 @@ shinyModuleUserInterface <- function(id, label) {
 shinyModule <- function(input, output, session, data){ ## The parameter "data" is reserved for the data object passed on from the previous app
   ns <- session$ns ## all IDs of UI functions need to be wrapped in ns()
 
-  outl <- reactive({
-    lapply(data, \(x) {
-      xx <- outlie(x, plot = FALSE)
-      if (input$select_var == "speed" &&
-          isTRUE(input$recursive) &&
-          !is.null(input$slider_filtertest)) {
-        threshold <- input$slider_filtertest[2]
+  # Raw outliers; not affected by recursion. Drives the slider's quantile space
+  # so its range stays anchored to the actual data max.
+  outl_raw <- reactive({
+    lapply(data, \(x) outlie(x, plot = FALSE))
+  })
 
+  outl <- reactive({
+    if (input$select_var == "speed" &&
+        isTRUE(input$recursive) &&
+        !is.null(input$slider_filtertest)) {
+      threshold <- input$slider_filtertest[2]
+      map2(data, outl_raw(), function(x, xx) {
         while (nrow(x) > 0 && max(xx[["speed"]]) > threshold) {
           keep <- xx[["speed"]] < threshold
-          if (!any(keep)) return(x)
-          
+          if (!any(keep)) break
           x <- x[keep, ]
           xx <- outlie(x, plot = FALSE)
         }
-      }
-      xx
-    })
+        xx
+      })
+    } else {
+      outl_raw()
+    }
+  })
+
+  # Quantile choices for the sliders, computed from raw outliers only.
+  slider_quantiles <- reactive({
+    req(input$select_var)
+    outl_tibbl <- unlist(sapply(outl_raw(), \(x) x[, input$select_var]))
+    req(length(outl_tibbl) > 0)
+    q <- quantile(outl_tibbl, probs = seq(0, 1, by = 0.01))
+    q[!duplicated(q)]
   })
 
   output$recursiveUI <- renderUI({
@@ -123,12 +137,9 @@ shinyModule <- function(input, output, session, data){ ## The parameter "data" i
       pivot_longer(everything(), names_to = "Individium", values_to = "speed")
   })
 
-  observeEvent(reactive_data(), {
+  observeEvent(slider_quantiles(), {
 
-    req(reactive_data())
-
-    quantiles = quantile(reactive_data()$speed, probs = seq(0, 1, by = 0.01))
-    quantiles = quantiles[!duplicated(quantiles)]
+    quantiles <- slider_quantiles()
 
     output$moreControls <- renderUI({
 
@@ -154,8 +165,7 @@ shinyModule <- function(input, output, session, data){ ## The parameter "data" i
 
   observeEvent(input$slider_filtertest,  {
     req(input$slider_filterperc)
-    quantiles = quantile(reactive_data()$speed, probs = seq(0, 1, by = 0.01))
-    quantiles = quantiles[!duplicated(quantiles)]
+    quantiles <- slider_quantiles()
     ind <- which(round(as.numeric(quantiles), 6) %in% round(as.numeric(input$slider_filtertest), 6))
     new_perc <- names(quantiles)[ind]
     if (!identical(new_perc, input$slider_filterperc)) {
@@ -166,8 +176,7 @@ shinyModule <- function(input, output, session, data){ ## The parameter "data" i
   observeEvent(input$slider_filterperc,  {
     req(input$slider_filtertest)
 
-    quantiles = quantile(reactive_data()$speed, probs = seq(0, 1, by = 0.01))
-    quantiles = quantiles[!duplicated(quantiles)]
+    quantiles <- slider_quantiles()
     ind <- which(names(quantiles) %in% input$slider_filterperc)
     new_vals <- round(as.numeric(quantiles)[ind], 6)
     if (!isTRUE(all.equal(new_vals, as.numeric(input$slider_filtertest)))) {
